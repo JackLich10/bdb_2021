@@ -340,12 +340,13 @@ pr_returns <- lin_return_yards_preds %>%
          .pred_ball_land_left = yardline_100 + .pred_kick_length_left,
          .pred_ball_land_caught = yardline_100 + .pred_kick_length_caught,
          dplyr::across(dplyr::starts_with(".pred_ball_land_"), ~ pmin(99, .))) %>% 
-  select(nflfastr_game_id, play_id, play, season, type, nfl_id, display_name, jersey_number, position, team_name,
+  select(nflfastr_game_id, play_id, frame_id, play, season, 
+         type, nfl_id, display_name, jersey_number, position, team_name,
          dplyr::ends_with("_ensemble"), special_teams_result, 
          yardline_100, returner_x, kick_length, 
          .pred_ball_land_left, .pred_ball_land_caught,
          kick_return_yardage, gain_loss, ball_x_dist, 
-         .pred_return_yardage = .pred, target) %>% 
+         .pred_return_yardage = .pred) %>% 
   mutate(ball_land = yardline_100 + kick_length,
          net_touchback = 80,
          net_out_of_bounds = .pred_ball_land_left,

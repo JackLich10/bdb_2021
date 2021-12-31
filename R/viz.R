@@ -5,7 +5,20 @@ source("R/ggfield.R")
 punts <- readRDS(paste0("data/proc/punts2020.rds"))
 control <- readRDS(paste0("data/proc/control2020.rds"))
 vision_cones <- readRDS(paste0("data/proc/vision_cones2020.rds"))
-# players <- readr::read_csv("data/players.csv")
+
+# Play level data
+play_info <- purrr::map_df(2018:2020, function(sn) {
+  readRDS(paste0("data/proc/punt_plays", sn, ".rds")) %>% 
+    dplyr::mutate(season = sn)
+}) 
+
+pr_returns_epa <- readRDS("output/pr_returns.rds")
+
+# Punt return probability predictions
+return_prob_preds <- dplyr::bind_rows(readRDS("data/models/train_preds.rds") %>% 
+                                        dplyr::mutate(type = "train"),
+                                      readRDS("data/models/test_preds.rds") %>% 
+                                        dplyr::mutate(type = "test"))
 
 vision_cone_control <- vision_cones %>% 
   dplyr::rename(returner_id = nfl_id) %>% 
@@ -35,7 +48,20 @@ rm(control, vision_cones)
 #             stat = "unique", size = 3) +
 #   facet_wrap(~ play)
 # 
-plot_vision_control <- function(p, f = NULL, anim = TRUE) {
+
+# Palette 
+outcome_pal <- dplyr::tibble("Return" = "#66C2A5",
+                             "Fair Catch" = "#FC8D62", 
+                             "Downed" = "#8DA0CB", 
+                             "Touchback" = "#E78AC3", 
+                             "OOB" = "#A6D854",
+                             "Actual" = "#FFD92F",
+                             "Expected" = "#E5C494") %>% 
+  tidyr::pivot_longer(cols = dplyr::everything(),
+                      names_to = "outcome",
+                      values_to = "color")
+
+plot_vision_control <- function(p, f = NULL, anim = TRUE, exp_return = NULL, pause = 13) {
   
   play <- play_info %>% 
     dplyr::filter(play == p)
@@ -81,22 +107,98 @@ plot_vision_control <- function(p, f = NULL, anim = TRUE) {
       dplyr::filter(frame_id == f)
   }
   
-  plot <- vision_cone_control %>%
+  vision_cone_control_filtered <- vision_cone_control %>%
     dplyr::filter(play == p) %>%
     dplyr::left_join(punts_filtered %>% dplyr::distinct(frame_id, sec),
                      by = "frame_id") %>% 
+    dplyr::arrange(frame_id)
+  
+  if (!is.null(exp_return)) {
+    # Expected return yards
+    exp_return <- exp_return %>% 
+      dplyr::filter(play == p) %>% 
+      dplyr::transmute(play, frame_id,
+                       net_touchback, net_out_of_bounds, net_downed, net_fair_catch, net_return,
+                       exp_net = 100 - exp_net, net = 100 - net) %>% 
+      tidyr::pivot_longer(cols = -c(play, frame_id),
+                          names_to = "result",
+                          names_prefix = "net_",
+                          values_to = "net") %>% 
+      dplyr::mutate(result = stringr::str_to_title(stringr::str_replace_all(result, "_", " ")),
+                    result = ifelse(result == "Out Of Bounds", "OOB", result),
+                    result = dplyr::case_when(
+                      result == "Net" ~ "Actual",
+                      result == "Exp Net" ~ "Expected",
+                      TRUE ~ result),
+                    vjust = ifelse(result %in% c("OOB", "Expected"), -0.5, 1.1),
+                    hjust = ifelse(result %in% c("Actual", "Expected"), 0, 1),
+                    x = ifelse(result %in% c("Actual", "Expected"), 53+1.1, 0-1.1)) %>% 
+      dplyr::left_join(outcome_pal,
+                       by = c("result" = "outcome")) 
+    
+    # Find frame to repeat
+    repeat_frame <- vision_cone_control_filtered %>% 
+      dplyr::filter(frame_id == min(exp_return$frame_id))
+    
+    # Repeat vision cones pause times
+    repeated_vision_control <- purrr::map(seq_len(pause), ~ repeat_frame) %>% 
+      dplyr::bind_rows(.id="id") %>% 
+      dplyr::mutate(frame_id = frame_id + as.numeric(id))
+    
+    vision_cone_control_filtered <- vision_cone_control_filtered %>% 
+      dplyr::mutate(frame_id = ifelse(frame_id > min(exp_return$frame_id), frame_id + pause, frame_id)) %>% 
+      dplyr::bind_rows(repeated_vision_control) %>% 
+      dplyr::arrange(frame_id)
+    
+    # Repeat expected return yards pause+6 times
+    exp_return <- purrr::map(seq_len(pause+6), ~ exp_return) %>% 
+      dplyr::bind_rows(.id="id") %>% 
+      dplyr::mutate(frame_id = frame_id + as.numeric(id) - 1)
+    
+    # Repeat player locations pause times
+    punts_filtered_frame <- punts_filtered %>% 
+      dplyr::filter(frame_id == min(exp_return$frame_id))
+    
+    repeated_players <- purrr::map(seq_len(pause), ~ punts_filtered_frame) %>% 
+      dplyr::bind_rows(.id="id") %>% 
+      dplyr::mutate(frame_id = frame_id + as.numeric(id))
+    
+    punts_filtered <- punts_filtered %>% 
+      dplyr::mutate(frame_id = ifelse(frame_id > min(exp_return$frame_id), frame_id + pause, frame_id)) %>% 
+      dplyr::bind_rows(repeated_players) %>% 
+      dplyr::arrange(frame_id)
+    
+    min_frame <- min(vision_cone_control_filtered$frame_id)
+    max_frame <- max(vision_cone_control_filtered$frame_id)
+    
+    exp_return <- exp_return %>% 
+      dplyr::bind_rows(tidyr::crossing(play = p,
+                                       frame_id = seq(min_frame, max_frame, by = 1),
+                                       result = unique(exp_return$result)) %>% 
+                         dplyr::filter(!frame_id %in% unique(exp_return$frame_id)))
+    
+  }
+  
+  plot <- vision_cone_control_filtered %>%
+    # filter(frame_id == i) %>% 
     ggplot(aes(x, y)) +
     # plot field
-    gg_field(field_color = "white", line_color = "black", 
+    gg_field(field_color = "white", line_color = "black",
              sideline_color = "white", endzone_color = "white",
              buffer_y = 10, buffer_x = 10, direction = "vert",
-             yardmin = pmax(0, pmin(unique(play$yardline_100), 100 - unique(play$yardline_100))-15), 
+             yardmin = pmax(0, pmin(unique(play$yardline_100), 100 - unique(play$yardline_100))-15),
              yardmax = pmin(120, max(punts_filtered$x, na.rm = T)+10)) +
     stat_summary_2d(aes(z = 100*control), alpha = 0.6, binwidth = 1) +
-    # geom_polygon(aes(fill = 100*control), group = 1, alpha = 0.6) +
-    # geom_contour_filled(aes(z = 100*control),
-    #                     bins = 8+1, alpha = 0.6) +
-    # geom_contour(aes(aes(z = 100*control), alpha = 0.6)) +
+    # Expected return yards annotations
+    geom_segment(data = exp_return,
+                 aes(x = net, xend = net,
+                     y = 0, yend = 53,
+                     color = color),
+                 size = 0.9, lty = 5) +
+    geom_text(data = exp_return,
+              aes(net, x, label = result, 
+                  vjust = vjust, hjust = hjust, color = color),
+              size = 2.8, fontface = "bold.italic") +
     geom_segment(data = punts_filtered,
                  aes(x, y, xend = x + s_x, yend = y + s_y,
                      # fill = fill,
@@ -150,7 +252,7 @@ plot_vision_control <- function(p, f = NULL, anim = TRUE) {
   
   if (isTRUE(anim)) {
     plot <- plot +     
-      gganimate::transition_time(sec) +
+      gganimate::transition_time(frame_id) +
       gganimate::ease_aes('linear')
   }
   
@@ -160,35 +262,21 @@ plot_vision_control <- function(p, f = NULL, anim = TRUE) {
 ex_field_control_plot <- plot_vision_control(p = "2020111505_3874", f = 66, anim = FALSE)
 ggsave("output/ex_field_control_plot.png", .Last.value, dpi = 700, height = 5, width = 8)
 
-plot_vision_control(p = "2018123000_2165")
-punt_anim <- plot_vision_control(p = "2020100501_500", anim = TRUE)
+punt_anim <- plot_vision_control(p = "2020100501_500", anim = TRUE, 
+                                 exp_return = pr_returns_epa, pause = 13)
 
-pr_returns %>% 
-  filter(special_teams_result == "Downed", season == 2020) %>% 
-  select(play, ends_with("_ensemble"))
+# plot_vision_control(p = "2020091308_1801", anim = TRUE)
 
-play_info %>% 
-  filter(play == "2020091307_328") %>% 
-  select(kick_length)
 
-play_info %>% 
-  filter(special_teams_result != "Muffed") %>% 
-  count(special_teams_result) %>% 
-  mutate(pct = n/sum(n))
-  
-
-plot_vision_control(p = "2020091308_1801", anim = TRUE)
-
-probs_over_time_anim <- return_prob_preds %>% 
+probs_over_time <- return_prob_preds %>% 
   dplyr::filter(play == "2020100501_500") %>%
   # filter(frame_id == 45) %>% 
-  select(-.pred_class) %>% 
+  dplyr::select(-.pred_class) %>% 
   dplyr::bind_rows(tidyr::crossing(sec = seq(0, 2, by = 0.1),
                                    model = unique(return_prob_preds$model))) %>% 
   dplyr::arrange(sec) %>% 
   tidyr::fill(.pred_return, .pred_downed, .pred_out_of_bounds, .pred_fair_catch, .pred_touchback,
               play, special_teams_result, result, .direction = "up") %>% 
-  mutate(play = paste0(play, ": ", special_teams_result)) %>% 
   dplyr::filter(sec >= 3, sec < 7) %>% 
   tidyr::pivot_longer(cols = starts_with(".pred_"),
                       names_prefix = ".pred_",
@@ -198,17 +286,38 @@ probs_over_time_anim <- return_prob_preds %>%
   dplyr::mutate(agg_prob = mean(probability)) %>% 
   dplyr::ungroup() %>% 
   dplyr::mutate(outcome = stringr::str_to_title(stringr::str_replace_all(outcome, "_", " ")),
+                outcome = ifelse(outcome == "Out Of Bounds", "OOB", outcome),
                 pos_x = dplyr::case_when(
                   outcome == "Return" ~ 3.25,
                   outcome == "Fair Catch" ~ 4 + 0.1,
                   outcome == "Downed" ~ 4.75 + 2*0.1,
                   outcome == "Touchback" ~ 5.5 + 3*0.1,
-                  TRUE ~ 6.25 + 4*0.1)) %>% 
-  ggplot(aes(sec, probability, color = outcome, lty = model)) +
+                  TRUE ~ 6.25 + 4*0.1))
+
+repeat_frame <- probs_over_time %>% 
+  dplyr::filter(frame_id == 75)
+
+repeated_frames <- purrr::map(seq_len(13), ~ repeat_frame) %>% 
+  dplyr::bind_rows(.id="id") %>% 
+  dplyr::mutate(frame_id = frame_id + as.numeric(id))
+
+probs_over_time <- probs_over_time %>% 
+  dplyr::mutate(frame_id = ifelse(frame_id > min(repeat_frame$frame_id), frame_id + 13, frame_id)) %>% 
+  dplyr::bind_rows(repeated_frames) %>% 
+  dplyr::arrange(frame_id) %>% 
+  dplyr::left_join(outcome_pal,
+                   by = c("outcome")) %>% 
+  tidyr::fill(sec, .direction = "down")
+
+summary(vision_cone_control_filtered$frame_id)
+summary(probs_over_time$frame_id)
+
+probs_over_time_anim <- probs_over_time %>% 
+  ggplot(aes(sec, probability, color = color, lty = model)) +
   geom_line(aes(size = 0.8)) +
   scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
   scale_size_identity() +
-  scale_color_brewer(palette = "Set2") +
+  scale_color_identity() +
   geom_text(aes(x = pos_x, y = 0.95,
                 label = outcome),
             stat = "unique", show.legend = FALSE,
@@ -218,7 +327,7 @@ probs_over_time_anim <- return_prob_preds %>%
             stat = "unique", show.legend = FALSE,
             size = 4.1, fontface = "bold.italic") +
   # setting animation parameters
-  gganimate::transition_reveal(sec)  +
+  gganimate::transition_reveal(frame_id)  +
   gganimate::ease_aes('linear') +
   jacklich::theme_jack() +
   labs(x = "Seconds from snap",
@@ -244,14 +353,14 @@ anim_save(filename = "output/sample_return_probs_over_time.gif",
                               # renderer = ffmpeg_renderer(), # for mp4
                               renderer = gifski_renderer()))
 
+# Combine gifs into one gif
 library(magick)
-
 
 a_mgif <- image_read(path = "output/sample_punt_over_time.gif")
 b_mgif <- image_read(path = "output/sample_return_probs_over_time.gif")
 
 new_gif <- image_append(c(a_mgif[1], b_mgif[1]), stack = FALSE)
-for(i in 2:100){
+for(i in 2:length(a_mgif)){
   combined <- image_append(c(a_mgif[i], b_mgif[i]), stack = FALSE)
   new_gif <- c(new_gif, combined)
 }
