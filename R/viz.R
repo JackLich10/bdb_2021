@@ -1,4 +1,4 @@
-### Visualizations
+### Animations 
 
 source("R/ggfield.R")
 
@@ -27,27 +27,6 @@ vision_cone_control <- vision_cones %>%
   dplyr::select(game_id, play_id, frame_id, play, x, y, control)
 
 rm(control, vision_cones)
-
-
-# vision_cone_control %>% 
-#   left_join(returners %>% 
-#               select(game_id, play_id, frame_id, special_teams_result, ball_land_frame,
-#                      returner_x = x, 
-#                      returner_y = y),
-#             by = c("game_id", "play_id", "frame_id")) %>% 
-#   mutate(dist_to_returner = sqrt((x-returner_x)^2 + (y-returner_y)^2)) %>%
-#   group_by(play, frame_id) %>% 
-#   summarise(control_wt = sum(control*dist_to_returner)/sum(dist_to_returner),
-#             control = mean(control),
-#             across(c(ball_land_frame, special_teams_result), unique),
-#             .groups = "drop") %>% 
-#   tidyr::pivot_longer(cols = starts_with("control")) %>% 
-#   ggplot(aes(frame_id, value, color = name)) +
-#   geom_line() +
-#   geom_text(aes(ball_land_frame, 0, label = special_teams_result),
-#             stat = "unique", size = 3) +
-#   facet_wrap(~ play)
-# 
 
 # Palette 
 outcome_pal <- dplyr::tibble("Return" = "#66C2A5",
@@ -267,6 +246,7 @@ punt_anim <- plot_vision_control(p = "2020100501_500", anim = TRUE,
 
 # plot_vision_control(p = "2020091308_1801", anim = TRUE)
 
+sequence <- seq(0.25, 6.75, by = 0.5)
 
 probs_over_time <- return_prob_preds %>% 
   dplyr::filter(play == "2020100501_500") %>%
@@ -277,7 +257,7 @@ probs_over_time <- return_prob_preds %>%
   dplyr::arrange(sec) %>% 
   tidyr::fill(.pred_return, .pred_downed, .pred_out_of_bounds, .pred_fair_catch, .pred_touchback,
               play, special_teams_result, result, .direction = "up") %>% 
-  dplyr::filter(sec >= 3, sec < 7) %>% 
+  dplyr::filter(sec >= 0, sec < 7) %>% 
   tidyr::pivot_longer(cols = starts_with(".pred_"),
                       names_prefix = ".pred_",
                       names_to = "outcome",
@@ -288,11 +268,11 @@ probs_over_time <- return_prob_preds %>%
   dplyr::mutate(outcome = stringr::str_to_title(stringr::str_replace_all(outcome, "_", " ")),
                 outcome = ifelse(outcome == "Out Of Bounds", "OOB", outcome),
                 pos_x = dplyr::case_when(
-                  outcome == "Return" ~ 3.25,
-                  outcome == "Fair Catch" ~ 4 + 0.1,
-                  outcome == "Downed" ~ 4.75 + 2*0.1,
-                  outcome == "Touchback" ~ 5.5 + 3*0.1,
-                  TRUE ~ 6.25 + 4*0.1))
+                  outcome == "Return" ~ sequence[1],
+                  outcome == "Fair Catch" ~ (sequence[1] + sequence[length(sequence)/2])/2,
+                  outcome == "Downed" ~ sequence[length(sequence)/2],
+                  outcome == "Touchback" ~ (sequence[length(sequence)] + sequence[length(sequence)/2])/2,
+                  TRUE ~ sequence[length(sequence)]))
 
 repeat_frame <- probs_over_time %>% 
   dplyr::filter(frame_id == 75)
@@ -309,10 +289,8 @@ probs_over_time <- probs_over_time %>%
                    by = c("outcome")) %>% 
   tidyr::fill(sec, .direction = "down")
 
-summary(vision_cone_control_filtered$frame_id)
-summary(probs_over_time$frame_id)
-
 probs_over_time_anim <- probs_over_time %>% 
+  dplyr::mutate(frame_id = ifelse(is.na(frame_id), (sec+1.1)*10, frame_id)) %>% 
   ggplot(aes(sec, probability, color = color, lty = model)) +
   geom_line(aes(size = 0.8)) +
   scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
@@ -365,5 +343,5 @@ for(i in 2:length(a_mgif)){
   new_gif <- c(new_gif, combined)
 }
 
-anim_save(filename = "output/punt_combined.gif",
+anim_save(filename = "output/punt_combined2.gif",
           new_gif)

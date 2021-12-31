@@ -315,8 +315,7 @@ lin_test_preds %>%
   yardstick::rmse(kick_return_yardage, .pred)
 
 lin_test_preds %>% 
-  filter(!is.na(kick_return_yardage)) %>% 
-  group_by(.pred = (.pred %/% 1) * 1) %>% 
+  dplyr::group_by(.pred = (.pred %/% 1) * 1) %>% 
   summarise_kick_return_yards() %>% 
   plot_kick_return_yards(metric = .pred) +
   geom_abline()
@@ -332,35 +331,34 @@ lin_return_yards_preds <- lin_fit_best %>%
                   TRUE ~ "test"))
 
 pr_returns <- lin_return_yards_preds %>% 
-  mutate(yardline_100 = los_x - 10,
-         returner_x = x - 10,
-         # .pred = .pred + 1.5, # add 1.5 to punt return yard prediction
-         .pred_kick_length_left = predict(kick_length_left_mod, newdata = .),
-         .pred_kick_length_caught = predict(kick_length_caught_mod, newdata = .),
-         .pred_ball_land_left = yardline_100 + .pred_kick_length_left,
-         .pred_ball_land_caught = yardline_100 + .pred_kick_length_caught,
-         dplyr::across(dplyr::starts_with(".pred_ball_land_"), ~ pmin(99, .))) %>% 
-  select(nflfastr_game_id, play_id, frame_id, play, season, 
-         type, nfl_id, display_name, jersey_number, position, team_name,
-         dplyr::ends_with("_ensemble"), special_teams_result, 
-         yardline_100, returner_x, kick_length, 
-         .pred_ball_land_left, .pred_ball_land_caught,
-         kick_return_yardage, gain_loss, ball_x_dist, 
-         .pred_return_yardage = .pred) %>% 
-  mutate(ball_land = yardline_100 + kick_length,
-         net_touchback = 80,
-         net_out_of_bounds = .pred_ball_land_left,
-         net_downed = .pred_ball_land_left,
-         net_fair_catch = .pred_ball_land_caught,
-         net_return = .pred_ball_land_caught - .pred_return_yardage,
-         exp_net = .pred_touchback_ensemble*net_touchback +
-           .pred_out_of_bounds_ensemble*net_out_of_bounds +
-           .pred_downed_ensemble*net_downed +
-           .pred_fair_catch_ensemble*net_fair_catch +
-           .pred_return_ensemble*net_return,
-         net = ball_land - dplyr::coalesce(kick_return_yardage, 0),
-         net = ifelse(special_teams_result == "Touchback", 80, net),
-         net = pmin(99, net))
+  dplyr::mutate(yardline_100 = los_x - 10,
+                returner_x = x - 10,
+                .pred_kick_length_left = predict(kick_length_left_mod, newdata = .),
+                .pred_kick_length_caught = predict(kick_length_caught_mod, newdata = .),
+                .pred_ball_land_left = yardline_100 + .pred_kick_length_left,
+                .pred_ball_land_caught = yardline_100 + .pred_kick_length_caught,
+                dplyr::across(dplyr::starts_with(".pred_ball_land_"), ~ pmin(99, .))) %>% 
+  dplyr::select(nflfastr_game_id, play_id, frame_id, play, season, 
+                type, nfl_id, display_name, jersey_number, position, team_name,
+                dplyr::ends_with("_ensemble"), special_teams_result, 
+                yardline_100, returner_x, kick_length, 
+                .pred_ball_land_left, .pred_ball_land_caught,
+                kick_return_yardage, gain_loss, ball_x_dist, 
+                .pred_return_yardage = .pred) %>% 
+  dplyr::mutate(ball_land = yardline_100 + kick_length,
+                net_touchback = 80,
+                net_out_of_bounds = .pred_ball_land_left,
+                net_downed = .pred_ball_land_left,
+                net_fair_catch = .pred_ball_land_caught,
+                net_return = .pred_ball_land_caught - .pred_return_yardage,
+                exp_net = .pred_touchback_ensemble*net_touchback +
+                  .pred_out_of_bounds_ensemble*net_out_of_bounds +
+                  .pred_downed_ensemble*net_downed +
+                  .pred_fair_catch_ensemble*net_fair_catch +
+                  .pred_return_ensemble*net_return,
+                net = ball_land - dplyr::coalesce(kick_return_yardage, 0),
+                net = ifelse(special_teams_result == "Touchback", 80, net),
+                net = pmin(99, net))
 
 # `nflfastR` play-by-play for expected points
 ep <- nflreadr::load_pbp(seasons = 2018:2020) %>% 
@@ -435,14 +433,14 @@ expected_points <- dplyr::bind_rows(ep_real, ep_exp) %>%
   dplyr::mutate(diff_epa = act_epa - exp_epa)
 
 pr_returns_epa <- pr_returns %>% 
-  left_join(play_info %>% 
-              select(play, punt_team = posteam),
-            by = "play") %>% 
-  left_join(expected_points %>% 
-              select(game_id, play_id, fumble, fumble_lost, dplyr::ends_with("_epa")),
-            by = c("nflfastr_game_id" = "game_id", "play_id")) %>% 
-  mutate(diff_net = exp_net - net,
-         dplyr::across(c(net, exp_net), ~ 100 - .))
+  dplyr::left_join(play_info %>% 
+                     dplyr::select(play, punt_team = posteam),
+                   by = "play") %>% 
+  dplyr::left_join(expected_points %>% 
+                     dplyr::select(game_id, play_id, fumble, fumble_lost, dplyr::ends_with("_epa")),
+                   by = c("nflfastr_game_id" = "game_id", "play_id")) %>% 
+  dplyr::mutate(diff_net = exp_net - net,
+                dplyr::across(c(net, exp_net), ~ 100 - .))
 
 saveRDS(pr_returns_epa, "output/pr_returns.rds")
 
